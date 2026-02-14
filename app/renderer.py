@@ -87,9 +87,9 @@ def render_job(
     cursor = 0.0
     durations: list[float] = []
     starts: list[float] = []
+    max_content_end = 0.0
 
     try:
-        overlap_total = transition * max(0, len(segments) - 1)
         for idx, seg in enumerate(segments):
             voice_src = None
             voice_duration = 0.0
@@ -105,11 +105,9 @@ def render_job(
             starts.append(start)
             durations.append(segment_duration)
 
-            # Keep full timeline (unreduced) by extending the last visual clip.
-            # This prevents trailing black while BGM follows unreduced duration.
-            extra_tail = overlap_total if idx == len(segments) - 1 else 0.0
-            clip = ImageClip(str(seg.image_path), duration=(segment_duration + extra_tail))
+            clip = ImageClip(str(seg.image_path), duration=segment_duration)
             clip = _fit_center(clip, canvas.width, canvas.height).with_start(start)
+            max_content_end = max(max_content_end, start + segment_duration)
 
             if idx > 0 and transition > 0:
                 prev_group_id = segments[idx - 1].group_id
@@ -157,6 +155,7 @@ def render_job(
                 y_top = canvas.height - scaled_bottom_margin - subtitle.h
                 subtitle = subtitle.with_position((max(0, x_left), max(0, y_top)))
                 subtitle_layers.append(subtitle)
+                max_content_end = max(max_content_end, start + subtitle_duration)
 
             if voice_src:
                 if voice_end > 0:
@@ -164,6 +163,9 @@ def render_job(
                     if job.audio.voice_volume != 1.0:
                         voice_clip = voice_clip.with_volume_scaled(job.audio.voice_volume)
                     audio_tracks.append(voice_clip)
+                    max_content_end = max(
+                        max_content_end, start + voice_offset + voice_end
+                    )
 
             # Keep overlap timing consistent at every boundary.
             # First clip advances by full duration; following clips advance by
@@ -173,9 +175,8 @@ def render_job(
             else:
                 cursor += max(0.0, segment_duration - transition)
 
-        # Use unreduced duration so BGM fills intended full timeline.
-        total_duration = sum(durations)
-        total_duration = max(total_duration, 0.1)
+        # Trim by the actual latest content end (visual/subtitle/voice).
+        total_duration = max(max_content_end, 0.1)
 
         bg = ColorClip(
             size=(canvas.width, canvas.height),
