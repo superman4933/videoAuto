@@ -76,7 +76,7 @@ def main():
         color="white",
         stroke_color="black",
         stroke_width=2,
-        margin=(0, 0, 0, 100),
+        margin=(0, 0, 0, 350),
         duration=3,
     ).with_start(2)
     # 使用底部对齐 + 下边透明留白，避免字体度量差异导致贴底和裁剪
