@@ -34,16 +34,35 @@ def run(job_path: Path, output_dir: Path, cache_dir: Path) -> Path:
 
     for group_id, kind, node in sequence:
         image_path = downloader.fetch(node.image_url, "images")
-        voice_path = downloader.fetch(node.voice_url, "audio") if node.voice_url else None
-        segments.append(
-            ResolvedSegment(
-                group_id=group_id,
-                kind=kind,
-                image_path=image_path,
-                comment=node.comment,
-                voice_path=voice_path,
+        # New format: each node has narrations[].
+        # Expand one node into multiple segments (same image, different narration).
+        if node.narrations:
+            for narration in node.narrations:
+                voice_path = (
+                    downloader.fetch(narration.voice_url, "audio")
+                    if narration.voice_url
+                    else None
+                )
+                segments.append(
+                    ResolvedSegment(
+                        group_id=group_id,
+                        kind=kind,
+                        image_path=image_path,
+                        comment=narration.comment,
+                        voice_path=voice_path,
+                    )
+                )
+        else:
+            # No narration: keep one still segment with default duration.
+            segments.append(
+                ResolvedSegment(
+                    group_id=group_id,
+                    kind=kind,
+                    image_path=image_path,
+                    comment="",
+                    voice_path=None,
+                )
             )
-        )
 
     bgm_path = downloader.fetch(job.audio.bgm_url, "audio") if job.audio.bgm_url else None
 

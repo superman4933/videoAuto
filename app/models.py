@@ -4,10 +4,15 @@ from typing import Optional
 
 
 @dataclass
-class NodeSpec:
-    image_url: str
+class NarrationSpec:
     comment: str = ""
     voice_url: Optional[str] = None
+
+
+@dataclass
+class NodeSpec:
+    image_url: str
+    narrations: list[NarrationSpec] = field(default_factory=list)
 
 
 @dataclass

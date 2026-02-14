@@ -7,6 +7,7 @@ from .models import (
     CanvasSpec,
     GroupSpec,
     JobSpec,
+    NarrationSpec,
     NodeSpec,
     OutputSpec,
     SubtitleSpec,
@@ -24,11 +25,32 @@ def _parse_node(raw: dict[str, Any], field_name: str) -> NodeSpec:
     if not isinstance(raw, dict):
         raise ValueError(f"Invalid {field_name}: expected object.")
     image_url = _as_str(raw.get("image_url"), f"{field_name}.image_url")
-    comment = str(raw.get("comment", ""))
-    voice_url = raw.get("voice_url")
-    if voice_url is not None:
-        voice_url = _as_str(voice_url, f"{field_name}.voice_url")
-    return NodeSpec(image_url=image_url, comment=comment, voice_url=voice_url)
+    narrations_raw = raw.get("narrations", [])
+    if not isinstance(narrations_raw, list):
+        raise ValueError(f"Invalid {field_name}.narrations: expected array.")
+    narrations: list[NarrationSpec] = []
+    for idx, item in enumerate(narrations_raw):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Invalid {field_name}.narrations[{idx}]: expected object."
+            )
+        comment = str(item.get("comment", "")).strip()
+        voice_raw = item.get("voice_url")
+        voice_url = None
+        if isinstance(voice_raw, str):
+            voice_url = voice_raw.strip() or None
+        elif voice_raw is None:
+            voice_url = None
+        else:
+            raise ValueError(
+                f"Invalid {field_name}.narrations[{idx}].voice_url: expected string or null."
+            )
+
+        # 新规则：comment 或 voice_url 任一为空，跳过该 narration（不报错）
+        if not comment or not voice_url:
+            continue
+        narrations.append(NarrationSpec(comment=comment, voice_url=voice_url))
+    return NodeSpec(image_url=image_url, narrations=narrations)
 
 
 def _parse_group(raw: dict[str, Any], index: int) -> GroupSpec:
@@ -49,13 +71,8 @@ def _parse_group(raw: dict[str, Any], index: int) -> GroupSpec:
 def parse_job_file(job_path: Path) -> JobSpec:
     raw = json.loads(job_path.read_text(encoding="utf-8"))
 
-    # Backward compatibility: top-level array means groups only.
-    if isinstance(raw, list):
-        groups = [_parse_group(item, i) for i, item in enumerate(raw)]
-        return JobSpec(job_id=job_path.stem, groups=groups)
-
     if not isinstance(raw, dict):
-        raise ValueError("Invalid job json: expected object or array.")
+        raise ValueError("Invalid job json: expected object.")
 
     groups_raw = raw.get("groups")
     if not isinstance(groups_raw, list) or not groups_raw:
