@@ -12,6 +12,8 @@ from moviepy import (
 
 from .models import JobSpec, ResolvedSegment
 
+INTRA_GROUP_CUE_DELAY_SEC = 0.8
+
 
 def _fit_center(clip, width: int, height: int):
     scale = min(width / clip.w, height / clip.h)
@@ -96,7 +98,9 @@ def render_job(
     try:
         for idx, seg in enumerate(segments):
             is_group_first = idx == 0 or seg.group_id != segments[idx - 1].group_id
-            segment_voice_offset = voice_offset if is_group_first else 0.0
+            segment_voice_offset = (
+                voice_offset if is_group_first else INTRA_GROUP_CUE_DELAY_SEC
+            )
             voice_src = None
             voice_duration = 0.0
             voice_end = 0.0
