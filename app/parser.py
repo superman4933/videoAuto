@@ -96,6 +96,12 @@ def parse_job_file(job_path: Path) -> JobSpec:
     output = OutputSpec(
         filename=str(output_raw.get("filename", "output.mp4")),
         fps=int(output_raw.get("fps", 30)),
+        cover=(
+            str(output_raw.get("cover")).strip()
+            if isinstance(output_raw.get("cover"), str)
+            and str(output_raw.get("cover")).strip()
+            else None
+        ),
         canvas=canvas,
     )
 

@@ -33,6 +33,7 @@ class CanvasSpec:
 class OutputSpec:
     filename: str = "output.mp4"
     fps: int = 30
+    cover: Optional[str] = None
     canvas: CanvasSpec = field(default_factory=CanvasSpec)
 
 

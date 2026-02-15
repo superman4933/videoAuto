@@ -29,6 +29,7 @@ def render_job(
     segments: list[ResolvedSegment],
     output_path: Path,
     bgm_path: Path | None = None,
+    cover_path: Path | None = None,
 ) -> Path:
     if not segments:
         raise ValueError("No segments to render.")
@@ -87,10 +88,15 @@ def render_job(
     cursor = 0.0
     durations: list[float] = []
     starts: list[float] = []
-    max_content_end = 0.0
+    subtitle_segment_indices: list[int] = []
+    subtitle_start_times: dict[int, float] = {}
+    subtitle_end_times: dict[int, float] = {}
+    max_visual_voice_end = 0.0
 
     try:
         for idx, seg in enumerate(segments):
+            is_group_first = idx == 0 or seg.group_id != segments[idx - 1].group_id
+            segment_voice_offset = voice_offset if is_group_first else 0.0
             voice_src = None
             voice_duration = 0.0
             voice_end = 0.0
@@ -99,7 +105,7 @@ def render_job(
                 opened_audio_sources.append(voice_src)
                 voice_duration = voice_src.duration
 
-            segment_duration = max(default_still, voice_duration + voice_offset)
+            segment_duration = max(default_still, voice_duration + segment_voice_offset)
             # Cross dissolve: overlap next clip by `transition` seconds.
             start = cursor if idx == 0 else cursor - transition
             starts.append(start)
@@ -107,7 +113,7 @@ def render_job(
 
             clip = ImageClip(str(seg.image_path), duration=segment_duration)
             clip = _fit_center(clip, canvas.width, canvas.height).with_start(start)
-            max_content_end = max(max_content_end, start + segment_duration)
+            max_visual_voice_end = max(max_visual_voice_end, start + segment_duration)
 
             if idx > 0 and transition > 0:
                 prev_group_id = segments[idx - 1].group_id
@@ -124,17 +130,16 @@ def render_job(
             video_layers.append(clip)
 
             if voice_src:
-                available = max(0.0, segment_duration - voice_offset)
+                available = max(0.0, segment_duration - segment_voice_offset)
                 voice_end = min(voice_src.duration, available)
 
             if seg.comment:
                 # Subtitle duration rules:
-                # - with voice: follow voice_end + voice_offset
+                # - with voice: subtitle starts with voice and follows voice_end
                 # - without voice: follow full segment duration
                 # - always end a bit earlier to avoid overlap flash
-                raw_subtitle_duration = (
-                    (voice_end + voice_offset) if voice_src else segment_duration
-                )
+                subtitle_start = start + segment_voice_offset if voice_src else start
+                raw_subtitle_duration = voice_end if voice_src else segment_duration
                 subtitle_duration = min(
                     segment_duration,
                     max(0.05, raw_subtitle_duration - 0.05),
@@ -150,21 +155,25 @@ def render_job(
                 }
                 if job.subtitle.font_path and Path(job.subtitle.font_path).exists():
                     text_kwargs["font"] = job.subtitle.font_path
-                subtitle = TextClip(**text_kwargs).with_start(start)
+                subtitle = TextClip(**text_kwargs).with_start(subtitle_start)
                 x_left = (canvas.width - subtitle.w) / 2
                 y_top = canvas.height - scaled_bottom_margin - subtitle.h
                 subtitle = subtitle.with_position((max(0, x_left), max(0, y_top)))
                 subtitle_layers.append(subtitle)
-                max_content_end = max(max_content_end, start + subtitle_duration)
+                subtitle_segment_indices.append(idx)
+                subtitle_start_times[idx] = subtitle_start
+                subtitle_end_times[idx] = subtitle_start + subtitle_duration
 
             if voice_src:
                 if voice_end > 0:
-                    voice_clip = voice_src.subclipped(0, voice_end).with_start(start + voice_offset)
+                    voice_clip = voice_src.subclipped(0, voice_end).with_start(
+                        start + segment_voice_offset
+                    )
                     if job.audio.voice_volume != 1.0:
                         voice_clip = voice_clip.with_volume_scaled(job.audio.voice_volume)
                     audio_tracks.append(voice_clip)
-                    max_content_end = max(
-                        max_content_end, start + voice_offset + voice_end
+                    max_visual_voice_end = max(
+                        max_visual_voice_end, start + segment_voice_offset + voice_end
                     )
 
             # Keep overlap timing consistent at every boundary.
@@ -175,15 +184,41 @@ def render_job(
             else:
                 cursor += max(0.0, segment_duration - transition)
 
+        # Hard-cut subtitle before next segment start to avoid adjacent overlap.
+        subtitle_gap = 0.05
+        for layer_idx, subtitle in enumerate(subtitle_layers):
+            seg_idx = subtitle_segment_indices[layer_idx]
+            if seg_idx + 1 >= len(starts):
+                continue
+            original_end = subtitle_end_times.get(seg_idx)
+            if original_end is None:
+                continue
+            capped_end = min(original_end, starts[seg_idx + 1] - subtitle_gap)
+            subtitle_start = subtitle_start_times.get(seg_idx, starts[seg_idx])
+            new_duration = max(0.05, capped_end - subtitle_start)
+            subtitle_layers[layer_idx] = subtitle.with_duration(new_duration)
+            subtitle_end_times[seg_idx] = subtitle_start + new_duration
+
         # Trim by the actual latest content end (visual/subtitle/voice).
-        total_duration = max(max_content_end, 0.1)
+        subtitle_max_end = max(subtitle_end_times.values(), default=0.0)
+        total_duration = max(max_visual_voice_end, subtitle_max_end, 0.1)
 
         bg = ColorClip(
             size=(canvas.width, canvas.height),
             color=canvas.bg_color,
             duration=total_duration,
         )
-        final = CompositeVideoClip([bg, *video_layers, *subtitle_layers])
+        first_frame_cover_layers = []
+        if cover_path and cover_path.exists():
+            cover_frame_duration = max(1.0 / max(1, job.output.fps), 0.04)
+            cover_clip = ImageClip(str(cover_path), duration=cover_frame_duration)
+            cover_clip = _fit_center(cover_clip, canvas.width, canvas.height).with_start(0)
+            # Put cover on top so frame-0 preview matches requested thumbnail.
+            first_frame_cover_layers.append(cover_clip)
+
+        final = CompositeVideoClip(
+            [bg, *video_layers, *subtitle_layers, *first_frame_cover_layers]
+        )
 
         if bgm_path and bgm_path.exists():
             bgm_src = AudioFileClip(str(bgm_path))

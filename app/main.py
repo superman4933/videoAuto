@@ -1,4 +1,6 @@
 import argparse
+import shutil
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -65,9 +67,59 @@ def run(job_path: Path, output_dir: Path, cache_dir: Path) -> Path:
             )
 
     bgm_path = downloader.fetch(job.audio.bgm_url, "audio") if job.audio.bgm_url else None
+    cover_path = downloader.fetch(job.output.cover, "images") if job.output.cover else None
 
     output_path = output_dir / job.output.filename
-    return render_job(job=job, segments=segments, bgm_path=bgm_path, output_path=output_path)
+    rendered_output = render_job(
+        job=job,
+        segments=segments,
+        bgm_path=bgm_path,
+        cover_path=cover_path,
+        output_path=output_path,
+    )
+    if cover_path:
+        _attach_cover_art(rendered_output, cover_path)
+    return rendered_output
+
+
+def _attach_cover_art(video_path: Path, cover_path: Path) -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        print("[WARN] ffmpeg not found in PATH. Skip attached cover metadata.")
+        return
+    if not video_path.exists() or not cover_path.exists():
+        return
+
+    tmp_path = video_path.with_name(f"{video_path.stem}.with_cover{video_path.suffix}")
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(cover_path),
+        "-map",
+        "0",
+        "-map",
+        "1",
+        "-c",
+        "copy",
+        "-c:v:1",
+        "mjpeg",
+        "-disposition:v:1",
+        "attached_pic",
+        str(tmp_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        tmp_path.replace(video_path)
+    except subprocess.CalledProcessError as err:
+        print(f"[WARN] Failed to attach cover metadata: {err.stderr.strip()}")
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
